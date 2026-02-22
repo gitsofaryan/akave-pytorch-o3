@@ -1,0 +1,3 @@
+torch>=2.0.0
+akavesdk>=0.3.0
+pytest

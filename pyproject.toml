@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pytorch-o3"
+version = "0.1.0"
+description = "PyTorch-compatible training pipeline using Akave O3 Native SDK"
+authors = [
+    { name = "Aryan Jain" }
+]
+dependencies = [
+    "torch>=2.0.0",
+    "akavesdk>=0.3.0"
+]
