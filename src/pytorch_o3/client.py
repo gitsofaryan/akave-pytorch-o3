@@ -1,5 +1,7 @@
 import os
+
 from akavesdk import SDK, SDKConfig, SDKError
+from tenacity import retry, wait_exponential, stop_after_attempt
 
 from .exceptions import O3AuthError
 
@@ -23,6 +25,7 @@ class O3Client:
         except Exception as e:
             raise O3AuthError(f"Init Error: {e}")
 
+    @retry(wait=wait_exponential(multiplier=1, min=2, max=10), stop=stop_after_attempt(5))
     def list_buckets(self):
         try:
             return self.ipc.list_buckets(None, offset=0, limit=0)

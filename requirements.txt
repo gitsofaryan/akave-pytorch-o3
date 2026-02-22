@@ -1,2 +1,3 @@
 torch>=2.0.0
 akavesdk @ git+https://github.com/d4v1d03/akavesdk-py.git
+tenacity>=8.2.0
