@@ -14,6 +14,8 @@ class O3Client:
         try:
             config = SDKConfig(
                 address=ipc_address,
+                max_concurrency=10,
+                block_part_size=1_000_000,
                 private_key=self.private_key,
                 use_connection_pool=True,
                 connection_timeout=30
@@ -24,8 +26,11 @@ class O3Client:
             raise O3AuthError(f"SDK Error: {e}")
         except Exception as e:
             raise O3AuthError(f"Init Error: {e}")
+        
+    def create_bucket(self,name):
+        return self.ipc.create_bucket(None,name)
 
-    @retry(wait=wait_exponential(multiplier=1, min=2, max=10), stop=stop_after_attempt(5))
+    @retry(wait=wait_exponential(multiplier=1, min=2, max=10), stop=stop_after_attempt(5)) 
     def list_buckets(self):
         try:
             return self.ipc.list_buckets(None, offset=0, limit=0)
