@@ -28,7 +28,7 @@ class O3Client:
             raise O3AuthError(f"Init Error: {e}")
         
     def create_bucket(self,name):
-        return self.ipc.create_bucket(None,name)
+        return self.ipc.create_bucket(None, name)
 
     @retry(wait=wait_exponential(multiplier=1, min=2, max=10), stop=stop_after_attempt(5)) 
     def list_buckets(self):

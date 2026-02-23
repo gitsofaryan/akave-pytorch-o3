@@ -1,3 +1,3 @@
 class O3AuthError(Exception):
-    """specific exception for auth error"""
+    """Specific exception for authentication errors."""
     pass
