@@ -122,7 +122,7 @@ def benchmark_local_dataset(dataset_path: str, batch_size: int = 32, num_workers
     
     results = benchmark_dataloader(dataloader, num_batches=100)
     
-    print(f"Results:")
+    print("Results:")
     print(f"  Total time: {results['total_time']:.2f}s")
     print(f"  Total samples: {results['total_samples']}")
     print(f"  Samples/second: {results['samples_per_second']:.2f}")
@@ -284,14 +284,14 @@ def main():
         o3_epoch1 = o3_results.get('epoch1', {})
         o3_epoch2 = o3_results.get('epoch2', {})
         
-        print(f"\nLocal Dataset:")
+        print("\nLocal Dataset:")
         print(f"  Samples/second: {local_results['samples_per_second']:.2f}")
         
-        print(f"\nO3Dataset (Epoch 1 - Cold Cache):")
+        print("\nO3Dataset (Epoch 1 - Cold Cache):")
         print(f"  Samples/second: {o3_epoch1.get('samples_per_second', 0):.2f}")
         
         if o3_epoch2:
-            print(f"\nO3Dataset (Epoch 2 - Warm Cache):")
+            print("\nO3Dataset (Epoch 2 - Warm Cache):")
             print(f"  Samples/second: {o3_epoch2.get('samples_per_second', 0):.2f}")
             
             if local_results['samples_per_second'] > 0:
