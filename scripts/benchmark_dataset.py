@@ -137,20 +137,27 @@ def benchmark_o3_dataset(
     bucket_name: str,
     object_keys: List[str],
     batch_size: int = 32,
-    num_workers: int = 4,
+    num_workers: int = 0,
     chunk_size: int = 1024 * 1024,
     cache_size: int = 100,
     cache_dir: str = None,
     num_epochs: int = 2
 ):
     """Benchmark O3Dataset with caching."""
-    print(f"\n{'='*60}")
+    print("\n" + "="*60)
     print("Benchmarking O3Dataset")
-    print(f"{'='*60}")
+    print("="*60)
     
     if not object_keys:
         print("Error: No object keys provided. Cannot benchmark O3Dataset.")
         return None
+    
+    # Auto-downgrade num_workers on spawn-based platforms
+    import multiprocessing
+    if num_workers > 0 and multiprocessing.get_start_method() == 'spawn':
+        print(f"Warning: num_workers={num_workers} may cause issues on spawn-based platforms.")
+        print("Downgrading to num_workers=0 for compatibility.")
+        num_workers = 0
     
     client = O3Client()
     
