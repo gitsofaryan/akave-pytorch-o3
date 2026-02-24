@@ -228,7 +228,7 @@ def main():
     parser.add_argument('--object-keys-file', type=str, help='File containing object keys (one per line)')
     parser.add_argument('--local-dataset-path', type=str, default='./data', help='Path for local dataset')
     parser.add_argument('--batch-size', type=int, default=32, help='Batch size')
-    parser.add_argument('--num-workers', type=int, default=4, help='Number of DataLoader workers')
+    parser.add_argument('--num-workers', type=int, default=0, help='Number of DataLoader workers (0 recommended for O3Dataset)')
     parser.add_argument('--chunk-size', type=int, default=1024*1024, help='Chunk size in bytes')
     parser.add_argument('--cache-size', type=int, default=100, help='LRU cache size')
     parser.add_argument('--cache-dir', type=str, help='Directory for disk cache')
