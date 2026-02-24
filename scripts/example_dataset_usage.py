@@ -53,7 +53,7 @@ def main():
             dataset,
             batch_size=32,
             shuffle=True,
-            num_workers=4,
+            num_workers=0,
             pin_memory=torch.cuda.is_available()
         )
         
@@ -61,7 +61,7 @@ def main():
         print("Iterating through dataset...")
         for epoch in range(2):
             print(f"\nEpoch {epoch + 1}")
-            for batch_idx, batch in enumerate(dataloader):
+            for batch_idx, _ in enumerate(dataloader):
                 # Your training code here
                 # batch contains the data from O3Dataset
                 if batch_idx % 10 == 0:

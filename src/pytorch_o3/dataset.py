@@ -4,12 +4,13 @@ import os
 import hashlib
 import logging
 import threading
+import tempfile
 from collections import OrderedDict
 from typing import Optional, List, Tuple, Any, Callable
 from pathlib import Path
 
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, get_worker_info
 
 from .client import O3Client
 from .exceptions import O3AuthError
@@ -21,11 +22,15 @@ class LRUCache:
     """Thread-safe LRU cache."""
     
     def __init__(self, max_size: int):
+        if max_size <= 0:
+            max_size = 0
         self.max_size = max_size
         self.cache: OrderedDict[str, bytes] = OrderedDict()
         self.lock = threading.Lock()
     
     def get(self, key: str) -> Optional[bytes]:
+        if self.max_size == 0:
+            return None
         with self.lock:
             if key in self.cache:
                 self.cache.move_to_end(key)
@@ -33,6 +38,8 @@ class LRUCache:
             return None
     
     def put(self, key: str, value: bytes) -> None:
+        if self.max_size == 0:
+            return
         with self.lock:
             if key in self.cache:
                 self.cache.move_to_end(key)
@@ -40,6 +47,12 @@ class LRUCache:
                 if len(self.cache) >= self.max_size:
                     self.cache.popitem(last=False)
             self.cache[key] = value
+    
+    def __getstate__(self):
+        return {'max_size': self.max_size}
+    
+    def __setstate__(self, state):
+        self.__init__(state['max_size'])
     
     def clear(self) -> None:
         with self.lock:
@@ -66,8 +79,14 @@ class O3Dataset(Dataset):
     ):
         if not object_keys:
             raise ValueError("object_keys cannot be empty")
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be positive")
+        if cache_size < 0:
+            raise ValueError("cache_size must be non-negative")
         
-        self.client = client
+        self._client = client
+        self._private_key = client.private_key
+        self._ipc_address = getattr(client, '_ipc_address', "connect.akave.ai:5500")
         self.bucket_name = bucket_name
         self.object_keys = object_keys
         self.chunk_size = chunk_size
@@ -81,6 +100,34 @@ class O3Dataset(Dataset):
         
         self._object_metadata = {}
         self._compute_metadata()
+    
+    @property
+    def client(self):
+        worker_info = get_worker_info()
+        if worker_info is not None:
+            worker_id = worker_info.id
+            if not hasattr(self, '_worker_clients'):
+                self._worker_clients = {}
+            if worker_id not in self._worker_clients:
+                self._worker_clients[worker_id] = O3Client(
+                    private_key=self._private_key,
+                    ipc_address=self._ipc_address
+                )
+            return self._worker_clients[worker_id]
+        return self._client
+    
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state['_client'] = None
+        state['_worker_clients'] = {}
+        return state
+    
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self._client = O3Client(
+            private_key=self._private_key,
+            ipc_address=self._ipc_address
+        )
     
     def _compute_metadata(self) -> None:
         for key in self.object_keys:
@@ -108,7 +155,9 @@ class O3Dataset(Dataset):
                     return int(size)
         
         if isinstance(info, dict):
-            size = info.get('size') or info.get('Size')
+            size = info.get('size')
+            if size is None:
+                size = info.get('Size')
             if size is not None:
                 return int(size)
         
@@ -120,7 +169,7 @@ class O3Dataset(Dataset):
     def _get_disk_cache_path(self, cache_key: str) -> Path:
         if not self.cache_dir:
             return None
-        cache_hash = hashlib.md5(cache_key.encode()).hexdigest()
+        cache_hash = hashlib.sha256(cache_key.encode()).hexdigest()
         return Path(self.cache_dir) / f"{cache_hash}.chunk"
     
     def _download_range(self, key: str, start: int, end: int) -> bytes:
@@ -150,8 +199,10 @@ class O3Dataset(Dataset):
         self.cache.put(cache_key, chunk_data)
         if self.cache_dir:
             disk_path = self._get_disk_cache_path(cache_key)
-            with open(disk_path, 'wb') as f:
-                f.write(chunk_data)
+            with tempfile.NamedTemporaryFile(dir=self.cache_dir, delete=False) as tmp:
+                tmp.write(chunk_data)
+                tmp_path = tmp.name
+            os.replace(tmp_path, disk_path)
         
         return chunk_data
     
@@ -183,7 +234,10 @@ class O3Dataset(Dataset):
         object_data = self._load_full_object(key)
         
         if self.transform:
-            return self.transform(object_data)
+            data = self.transform(object_data)
+            if self.target_transform:
+                return data, self.target_transform(data)
+            return data
         return object_data
     
     def get_cache_stats(self) -> dict:

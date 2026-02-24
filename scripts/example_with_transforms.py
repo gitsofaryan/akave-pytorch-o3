@@ -8,7 +8,6 @@ like PyTorch tensors, images, JSON, etc.
 import io
 import torch
 from torch.utils.data import DataLoader
-from PIL import Image
 
 from pytorch_o3 import O3Client, O3Dataset
 
@@ -16,14 +15,17 @@ from pytorch_o3 import O3Client, O3Dataset
 def torch_tensor_transform(data: bytes) -> torch.Tensor:
     """Transform bytes to PyTorch tensor."""
     buffer = io.BytesIO(data)
-    return torch.load(buffer)
+    return torch.load(buffer, weights_only=True)
 
 
 def image_transform(data: bytes) -> torch.Tensor:
     """Transform bytes to PyTorch tensor from image."""
+    try:
+        from PIL import Image
+        import torchvision.transforms as transforms
+    except ImportError:
+        raise ImportError("PIL and torchvision are required for image transforms")
     image = Image.open(io.BytesIO(data))
-    # Convert to tensor (you might want to add normalization, etc.)
-    import torchvision.transforms as transforms
     transform = transforms.Compose([
         transforms.ToTensor(),
     ])
@@ -58,7 +60,7 @@ def main():
         cache_size=50
     )
     
-    tensor_loader = DataLoader(tensor_dataset, batch_size=2, num_workers=2)
+    tensor_loader = DataLoader(tensor_dataset, batch_size=2, num_workers=0)
     for batch in tensor_loader:
         print(f"Tensor batch shape: {batch.shape if torch.is_tensor(batch) else 'varies'}")
         break  # Just show first batch
@@ -79,7 +81,7 @@ def main():
         cache_size=100
     )
     
-    image_loader = DataLoader(image_dataset, batch_size=4, num_workers=2)
+    image_loader = DataLoader(image_dataset, batch_size=4, num_workers=0)
     for batch in image_loader:
         print(f"Image batch shape: {batch.shape if torch.is_tensor(batch) else 'varies'}")
         break
@@ -100,7 +102,7 @@ def main():
         cache_size=200
     )
     
-    json_loader = DataLoader(json_dataset, batch_size=8, num_workers=2)
+    json_loader = DataLoader(json_dataset, batch_size=8, num_workers=0)
     for batch in json_loader:
         print(f"JSON batch: {type(batch)}")
         break
@@ -110,14 +112,13 @@ def main():
         """Safely load tensor with error handling."""
         try:
             buffer = io.BytesIO(data)
-            return torch.load(buffer)
+            return torch.load(buffer, weights_only=True)
         except Exception as e:
             print(f"Error loading tensor: {e}")
-            # Return a default tensor or raise
             return torch.zeros(1)
     
     print("\nExample 4: Custom transform with error handling")
-    safe_dataset = O3Dataset(
+    O3Dataset(
         client=client,
         bucket_name=bucket_name,
         object_keys=tensor_keys,

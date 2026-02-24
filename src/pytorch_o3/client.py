@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 class O3Client:
     def __init__(self, private_key=None, ipc_address="connect.akave.ai:5500"):
         self.private_key = private_key or os.getenv('AKAVE_PRIVATE_KEY')
+        self._ipc_address = ipc_address
         if not self.private_key:
             raise O3AuthError("AKAVE_PRIVATE_KEY is missing.")
             
@@ -46,6 +47,8 @@ class O3Client:
             
             if prefix:
                 files = [f for f in files if hasattr(f, 'name') and f.name.startswith(prefix)]
+                if len(files) < len([f for f in self.ipc.list_files(None, bucket_name) if hasattr(f, 'name')]):
+                    logger.warning(f"Some objects may have been filtered out due to missing 'name' attribute")
             
             if limit and limit > 0:
                 files = files[:limit]

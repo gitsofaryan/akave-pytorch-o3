@@ -174,10 +174,11 @@ def benchmark_o3_dataset(
             pin_memory=torch.cuda.is_available()
         )
         
-        epoch1_results = benchmark_dataloader(dataloader, num_batches=min(100, len(object_keys) // batch_size))
+        num_batches = max(1, min(100, (len(object_keys) + batch_size - 1) // batch_size))
+        epoch1_results = benchmark_dataloader(dataloader, num_batches=num_batches)
         cache_stats_epoch1 = dataset.get_cache_stats()
         
-        print(f"Results (Epoch 1):")
+        print("Results (Epoch 1):")
         print(f"  Total time: {epoch1_results['total_time']:.2f}s")
         print(f"  Total samples: {epoch1_results['total_samples']}")
         print(f"  Samples/second: {epoch1_results['samples_per_second']:.2f}")
@@ -186,10 +187,10 @@ def benchmark_o3_dataset(
         # Second epoch - cache hit scenario
         if num_epochs > 1:
             print("\nEpoch 2: Warm cache (cache hits expected)")
-            epoch2_results = benchmark_dataloader(dataloader, num_batches=min(100, len(object_keys) // batch_size))
+            epoch2_results = benchmark_dataloader(dataloader, num_batches=num_batches)
             cache_stats_epoch2 = dataset.get_cache_stats()
             
-            print(f"Results (Epoch 2):")
+            print("Results (Epoch 2):")
             print(f"  Total time: {epoch2_results['total_time']:.2f}s")
             print(f"  Total samples: {epoch2_results['total_samples']}")
             print(f"  Samples/second: {epoch2_results['samples_per_second']:.2f}")
@@ -276,9 +277,9 @@ def main():
     
     # Compare results
     if local_results and o3_results:
-        print(f"\n{'='*60}")
+        print("\n" + "="*60)
         print("Comparison Summary")
-        print(f"{'='*60}")
+        print("="*60)
         
         o3_epoch1 = o3_results.get('epoch1', {})
         o3_epoch2 = o3_results.get('epoch2', {})

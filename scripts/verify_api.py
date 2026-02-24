@@ -166,30 +166,32 @@ def test_object_operations(client: O3Client, bucket_name: str, test_key: str = N
     except Exception as e:
         print(f"   ✗ Error: {e}")
     
-    # Test 2: Get object info
-    if test_key:
-        print(f"\n2. Testing get_object_info for '{test_key}'...")
-        try:
-            info = client.get_object_info(bucket_name, test_key)
-            print(f"   ✓ Success! Returned: {type(info)}")
-            print(f"   Info attributes: {dir(info)[:10]}...")
+        # Test 2: Get object info
+        size = None
+        if test_key:
+            print(f"\n2. Testing get_object_info for '{test_key}'...")
+            try:
+                info = client.get_object_info(bucket_name, test_key)
+                print(f"   ✓ Success! Returned: {type(info)}")
+                print(f"   Info attributes: {dir(info)[:10]}...")
+                
+                # Try to extract size
+                if hasattr(info, 'size'):
+                    size = info.size
+                elif isinstance(info, dict):
+                    size = info.get('size')
+                    if size is None:
+                        size = info.get('Size')
+                print(f"   Object size: {size} bytes" if size else "   Could not determine size")
+            except NotImplementedError as e:
+                print(f"   ✗ {e}")
+            except Exception as e:
+                print(f"   ✗ Error: {e}")
             
-            # Try to extract size
-            size = None
-            if hasattr(info, 'size'):
-                size = info.size
-            elif isinstance(info, dict):
-                size = info.get('size') or info.get('Size')
-            print(f"   Object size: {size} bytes" if size else "   Could not determine size")
-        except NotImplementedError as e:
-            print(f"   ✗ {e}")
-        except Exception as e:
-            print(f"   ✗ Error: {e}")
-        
-        # Test 3: Download range
-        print(f"\n3. Testing download_object_range for '{test_key}'...")
-        try:
-            if size and size > 0:
+            # Test 3: Download range
+            print(f"\n3. Testing download_object_range for '{test_key}'...")
+            try:
+                if size and size > 0:
                 # Download first 1024 bytes
                 data = client.download_object_range(bucket_name, test_key, 0, min(1024, size))
                 print(f"   ✓ Success! Downloaded {len(data)} bytes")
