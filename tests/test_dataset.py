@@ -9,7 +9,11 @@ import unittest
 from unittest.mock import Mock, MagicMock, patch
 import tempfile
 import shutil
+import sys
 from pathlib import Path
+
+# Mock akavesdk before importing our modules
+sys.modules['akavesdk'] = MagicMock()
 
 import torch
 
