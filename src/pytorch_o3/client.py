@@ -1,13 +1,18 @@
 import os
+import io
+import logging
 
 from akavesdk import SDK, SDKConfig, SDKError
 from tenacity import retry, wait_exponential, stop_after_attempt
 
 from .exceptions import O3AuthError
 
+logger = logging.getLogger(__name__)
+
 class O3Client:
     def __init__(self, private_key=None, ipc_address="connect.akave.ai:5500"):
         self.private_key = private_key or os.getenv('AKAVE_PRIVATE_KEY')
+        self._ipc_address = ipc_address
         if not self.private_key:
             raise O3AuthError("AKAVE_PRIVATE_KEY is missing.")
             
@@ -36,6 +41,47 @@ class O3Client:
             return self.ipc.list_buckets(None, offset=0, limit=0)
         except Exception as e:
             raise e
+    
+    def list_objects(self, bucket_name: str, prefix: str = "", limit: int = 1000):
+        if hasattr(self.ipc, 'list_files'):
+            files = self.ipc.list_files(None, bucket_name)
+            
+            if prefix:
+                original_count = len([f for f in files if hasattr(f, 'name')])
+                files = [f for f in files if hasattr(f, 'name') and f.name.startswith(prefix)]
+                if len(files) < original_count:
+                    logger.warning("Some objects may have been filtered out due to missing 'name' attribute")
+            
+            if limit and limit > 0:
+                files = files[:limit]
+            
+            return files
+        else:
+            raise NotImplementedError("akavesdk IPC interface needs list_files method")
+    
+    def get_object_info(self, bucket_name: str, key: str):
+        if hasattr(self.ipc, 'file_info'):
+            info = self.ipc.file_info(None, bucket_name, key)
+            if info is None:
+                raise RuntimeError(f"File {key} not found in bucket {bucket_name}")
+            return info
+        else:
+            raise NotImplementedError("akavesdk IPC interface needs file_info method")
+    
+    def download_object_range(self, bucket_name: str, key: str, start: int, end: int) -> bytes:
+        if hasattr(self.ipc, 'create_range_file_download') and hasattr(self.ipc, 'download'):
+            file_download = self.ipc.create_range_file_download(None, bucket_name, key, start, end)
+            buffer = io.BytesIO()
+            self.ipc.download(None, file_download, buffer)
+            return buffer.getvalue()
+        elif hasattr(self.ipc, 'download'):
+            file_download = self.ipc.create_file_download(None, bucket_name, key)
+            buffer = io.BytesIO()
+            self.ipc.download(None, file_download, buffer)
+            full_data = buffer.getvalue()
+            return full_data[start:end]
+        else:
+            raise NotImplementedError("akavesdk IPC interface needs create_range_file_download and download methods")
 
     def close(self):
         self.sdk.close()
