@@ -140,7 +140,7 @@ class O3Dataset(Dataset):
                     'chunk_size': self.chunk_size
                 }
             except Exception as e:
-                raise RuntimeError(f"Failed to get metadata for object {key}: {e}")
+                raise RuntimeError(f"Failed to get metadata for object {key}: {e}") from e
     
     def _get_object_size(self, key: str) -> int:
         info = self.client.get_object_info(self.bucket_name, key)
@@ -206,8 +206,6 @@ class O3Dataset(Dataset):
         
         return chunk_data
     
-    def _get_sample_from_chunk(self, key: str, chunk_data: bytes, sample_idx: int) -> Any:
-        return chunk_data
     
     def __len__(self) -> int:
         return len(self.object_keys)

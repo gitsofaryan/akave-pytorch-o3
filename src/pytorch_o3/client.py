@@ -47,9 +47,10 @@ class O3Client:
             files = self.ipc.list_files(None, bucket_name)
             
             if prefix:
+                original_count = len([f for f in files if hasattr(f, 'name')])
                 files = [f for f in files if hasattr(f, 'name') and f.name.startswith(prefix)]
-                if len(files) < len([f for f in self.ipc.list_files(None, bucket_name) if hasattr(f, 'name')]):
-                    logger.warning(f"Some objects may have been filtered out due to missing 'name' attribute")
+                if len(files) < original_count:
+                    logger.warning("Some objects may have been filtered out due to missing 'name' attribute")
             
             if limit and limit > 0:
                 files = files[:limit]
