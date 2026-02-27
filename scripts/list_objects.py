@@ -31,26 +31,15 @@ def main():
         
         # Extract object keys - IPCFileListItem objects have .name attribute
         object_keys = []
-        if isinstance(objects, list):
-            for obj in objects:
-                if isinstance(obj, str):
-                    object_keys.append(obj)
-                elif hasattr(obj, 'name'):  # IPCFileListItem has .name
-                    object_keys.append(obj.name)
-                elif hasattr(obj, 'key'):
-                    object_keys.append(obj.key)
-                elif isinstance(obj, dict):
-                    object_keys.append(obj.get('name', obj.get('key', str(obj))))
-        elif hasattr(objects, '__iter__'):
-            for obj in objects:
-                if isinstance(obj, str):
-                    object_keys.append(obj)
-                elif hasattr(obj, 'name'):  # IPCFileListItem has .name
-                    object_keys.append(obj.name)
-                elif hasattr(obj, 'key'):
-                    object_keys.append(obj.key)
-                elif isinstance(obj, dict):
-                    object_keys.append(obj.get('name', obj.get('key', str(obj))))
+        for obj in objects:
+            if isinstance(obj, str):
+                object_keys.append(obj)
+            elif hasattr(obj, 'name'):  # IPCFileListItem has .name
+                object_keys.append(obj.name)
+            elif hasattr(obj, 'key'):
+                object_keys.append(obj.key)
+            elif isinstance(obj, dict):
+                object_keys.append(obj.get('name', obj.get('key', str(obj))))
         
         print(f"\nFound {len(object_keys)} objects:")
         for key in object_keys[:20]:  # Show first 20

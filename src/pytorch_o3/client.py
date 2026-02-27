@@ -1,4 +1,5 @@
 import os
+import io
 import logging
 
 from akavesdk import SDK, SDKConfig, SDKError
@@ -67,8 +68,6 @@ class O3Client:
             raise NotImplementedError("akavesdk IPC interface needs file_info method")
     
     def download_object_range(self, bucket_name: str, key: str, start: int, end: int) -> bytes:
-        import io
-        
         if hasattr(self.ipc, 'create_range_file_download') and hasattr(self.ipc, 'download'):
             file_download = self.ipc.create_range_file_download(None, bucket_name, key, start, end)
             buffer = io.BytesIO()

@@ -166,7 +166,7 @@ class O3Dataset(Dataset):
     def _get_cache_key(self, key: str, chunk_idx: int) -> str:
         return f"{key}:{chunk_idx}"
     
-    def _get_disk_cache_path(self, cache_key: str) -> Path:
+    def _get_disk_cache_path(self, cache_key: str) -> Optional[Path]:
         if not self.cache_dir:
             return None
         cache_hash = hashlib.sha256(cache_key.encode()).hexdigest()
@@ -252,4 +252,7 @@ class O3Dataset(Dataset):
         self.cache.clear()
         if self.cache_dir:
             for cache_file in Path(self.cache_dir).glob('*.chunk'):
-                cache_file.unlink()
+                try:
+                    cache_file.unlink()
+                except (FileNotFoundError, PermissionError, OSError):
+                    pass
