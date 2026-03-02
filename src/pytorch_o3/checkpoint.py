@@ -105,12 +105,17 @@ class O3CheckpointManager:
         # Extract CID from file metadata
         cid = self._extract_cid(file_meta)
 
+        # Determine parent CID for lineage (handles manager re-instantiation)
+        parent_cid = self._last_cid
+        if parent_cid is None:
+            parent_cid = self.get_latest_cid()
+
         # Build and upload metadata
         metadata = {
             "epoch": epoch,
             "timestamp": timestamp,
             "root_cid": cid,
-            "parent_cid": self._last_cid,
+            "parent_cid": parent_cid,
             "checkpoint_key": checkpoint_key,
             "size_bytes": len(checkpoint_bytes),
             "metrics": metrics or {},
@@ -181,8 +186,11 @@ class O3CheckpointManager:
                 data = self.client.download_object(self.bucket_name, f.name)
                 metadata = json.loads(data.decode('utf-8').rstrip('\x00 '))
                 checkpoints.append(metadata)
-            except Exception as e:
-                logger.warning(f"Failed to read metadata {f.name}: {e}")
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                logger.warning(f"Skipping malformed metadata {f.name}: {e}")
+            except Exception:
+                logger.exception(f"Failed to fetch metadata {f.name}")
+                raise
 
         # Sort by epoch descending
         checkpoints.sort(key=lambda x: x.get("epoch", 0), reverse=True)
@@ -243,16 +251,21 @@ class O3CheckpointManager:
 
         Returns:
             CID string
+
+        Raises:
+            RuntimeError: If CID cannot be extracted from response
         """
         if hasattr(file_meta, 'root_cid'):
             return str(file_meta.root_cid)
         elif hasattr(file_meta, 'cid'):
             return str(file_meta.cid)
         elif isinstance(file_meta, dict):
-            return file_meta.get('root_cid') or file_meta.get('cid', 'unknown')
-        else:
-            # Fallback: use string representation
-            return str(file_meta)
+            cid = file_meta.get('root_cid') or file_meta.get('cid')
+            if cid:
+                return str(cid)
+        elif isinstance(file_meta, str) and file_meta:
+            return file_meta
+        raise RuntimeError("Upload response missing CID (root_cid/cid)")
 
     def _find_metadata_by_cid(self, cid: str) -> Optional[Dict[str, Any]]:
         """Find checkpoint metadata by CID.

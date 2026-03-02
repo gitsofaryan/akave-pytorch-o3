@@ -270,6 +270,27 @@ class TestO3CheckpointManager(unittest.TestCase):
 
         self.assertEqual(epoch2_meta["parent_cid"], cid1)
 
+    def test_lineage_continuity_across_reinstantiation(self):
+        """Test parent_cid is preserved after manager re-instantiation."""
+        mgr1 = O3CheckpointManager(self.mock_client, self.bucket_name, self.prefix)
+
+        model = SimpleModel()
+
+        # Save first checkpoint
+        cid1 = mgr1.save_checkpoint(state_dict=model.state_dict(), epoch=1)
+
+        # Create NEW manager instance (simulates restart)
+        mgr2 = O3CheckpointManager(self.mock_client, self.bucket_name, self.prefix)
+
+        # Save second checkpoint with new manager
+        cid2 = mgr2.save_checkpoint(state_dict=model.state_dict(), epoch=2)
+
+        # Verify lineage is preserved (epoch 2 should have epoch 1 as parent)
+        checkpoints = mgr2.list_checkpoints()
+        epoch2_meta = next(c for c in checkpoints if c["epoch"] == 2)
+
+        self.assertEqual(epoch2_meta["parent_cid"], cid1)
+
     def test_minimum_size_padding(self):
         """Test that small checkpoints are padded to 127 bytes."""
         mgr = O3CheckpointManager(self.mock_client, self.bucket_name, self.prefix)
@@ -315,12 +336,29 @@ class TestCIDExtraction(unittest.TestCase):
         cid = mgr._extract_cid(file_meta)
         self.assertEqual(cid, "bafy789ghi")
 
-    def test_extract_cid_fallback(self):
-        """Test CID extraction falls back to str()."""
+    def test_extract_cid_from_string(self):
+        """Test CID extraction from string."""
         mgr = O3CheckpointManager(MagicMock(), "bucket", "prefix/")
 
         cid = mgr._extract_cid("some_string_cid")
         self.assertEqual(cid, "some_string_cid")
+
+    def test_extract_cid_raises_on_missing(self):
+        """Test CID extraction raises RuntimeError when CID missing."""
+        mgr = O3CheckpointManager(MagicMock(), "bucket", "prefix/")
+
+        # Empty dict
+        with self.assertRaises(RuntimeError) as ctx:
+            mgr._extract_cid({})
+        self.assertIn("missing CID", str(ctx.exception))
+
+        # Empty string
+        with self.assertRaises(RuntimeError):
+            mgr._extract_cid("")
+
+        # None
+        with self.assertRaises(RuntimeError):
+            mgr._extract_cid(None)
 
 
 if __name__ == "__main__":
