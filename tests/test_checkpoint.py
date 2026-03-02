@@ -5,9 +5,8 @@ Uses mocking to test without requiring real O3 connections.
 """
 
 import io
-import json
 import unittest
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock
 
 import sys
 import os
@@ -263,7 +262,7 @@ class TestO3CheckpointManager(unittest.TestCase):
         cid1 = mgr.save_checkpoint(state_dict=model.state_dict(), epoch=1)
 
         # Second checkpoint should reference first as parent
-        cid2 = mgr.save_checkpoint(state_dict=model.state_dict(), epoch=2)
+        mgr.save_checkpoint(state_dict=model.state_dict(), epoch=2)
 
         checkpoints = mgr.list_checkpoints()
         epoch2_meta = next(c for c in checkpoints if c["epoch"] == 2)
@@ -283,7 +282,7 @@ class TestO3CheckpointManager(unittest.TestCase):
         mgr2 = O3CheckpointManager(self.mock_client, self.bucket_name, self.prefix)
 
         # Save second checkpoint with new manager
-        cid2 = mgr2.save_checkpoint(state_dict=model.state_dict(), epoch=2)
+        mgr2.save_checkpoint(state_dict=model.state_dict(), epoch=2)
 
         # Verify lineage is preserved (epoch 2 should have epoch 1 as parent)
         checkpoints = mgr2.list_checkpoints()
