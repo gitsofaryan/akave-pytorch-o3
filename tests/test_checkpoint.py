@@ -5,16 +5,42 @@ Uses mocking to test without requiring real O3 connections.
 """
 
 import io
+import os
+import sys
 import unittest
 from unittest.mock import MagicMock
 
-import sys
-import os
+# Store original state for cleanup
+_original_modules = {}
+_original_path = None
 
-# Mock akavesdk before importing our modules
-sys.modules['akavesdk'] = MagicMock()
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+def setUpModule():
+    """Set up module-level test fixtures."""
+    global _original_modules, _original_path
+
+    # Store original state
+    _original_modules = dict(sys.modules)
+    _original_path = sys.path.copy()
+
+    # Mock akavesdk before importing our modules
+    sys.modules['akavesdk'] = MagicMock()
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+
+
+def tearDownModule():
+    """Clean up module-level test fixtures."""
+    # Restore original sys.path
+    sys.path[:] = _original_path
+
+    # Remove added modules (keep originals)
+    for key in list(sys.modules.keys()):
+        if key not in _original_modules:
+            del sys.modules[key]
+
+
+# Run setup before imports
+setUpModule()
 
 import torch
 import torch.nn as nn
