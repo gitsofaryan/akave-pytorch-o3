@@ -68,20 +68,76 @@ class O3Client:
         else:
             raise NotImplementedError("akavesdk IPC interface needs file_info method")
     
+    def _download_full(self, bucket_name: str, key: str) -> bytes:
+        """Internal method to download a full object."""
+        if not (hasattr(self.ipc, 'create_file_download') and hasattr(self.ipc, 'download')):
+            raise NotImplementedError("akavesdk IPC interface needs create_file_download and download methods")
+        file_download = self.ipc.create_file_download(None, bucket_name, key)
+        buffer = io.BytesIO()
+        self.ipc.download(None, file_download, buffer)
+        return buffer.getvalue()
+
+    @retry(wait=wait_exponential(multiplier=1, min=2, max=10), stop=stop_after_attempt(3))
     def download_object_range(self, bucket_name: str, key: str, start: int, end: int) -> bytes:
-        if hasattr(self.ipc, 'create_range_file_download') and hasattr(self.ipc, 'download'):
+        """Download a byte range from an object.
+
+        Args:
+            bucket_name: Name of the bucket
+            key: Object key/filename
+            start: Start byte offset
+            end: End byte offset
+
+        Returns:
+            Requested byte range as bytes
+        """
+        if hasattr(self.ipc, 'create_range_file_download'):
             file_download = self.ipc.create_range_file_download(None, bucket_name, key, start, end)
             buffer = io.BytesIO()
             self.ipc.download(None, file_download, buffer)
             return buffer.getvalue()
-        elif hasattr(self.ipc, 'download'):
-            file_download = self.ipc.create_file_download(None, bucket_name, key)
-            buffer = io.BytesIO()
-            self.ipc.download(None, file_download, buffer)
-            full_data = buffer.getvalue()
-            return full_data[start:end]
         else:
-            raise NotImplementedError("akavesdk IPC interface needs create_range_file_download and download methods")
+            # Fallback: download full and slice
+            full_data = self._download_full(bucket_name, key)
+            return full_data[start:end]
+
+    @retry(wait=wait_exponential(multiplier=1, min=2, max=10), stop=stop_after_attempt(3))
+    def download_object(self, bucket_name: str, key: str) -> bytes:
+        """Download a full object from O3 storage.
+
+        Args:
+            bucket_name: Name of the bucket
+            key: Object key/filename
+
+        Returns:
+            Full object data as bytes
+        """
+        return self._download_full(bucket_name, key)
+
+    @retry(wait=wait_exponential(multiplier=1, min=2, max=10), stop=stop_after_attempt(3))
+    def upload_object(self, bucket_name: str, key: str, data: bytes):
+        """Upload an object to O3 storage.
+
+        Args:
+            bucket_name: Name of the bucket
+            key: Object key/filename
+            data: Bytes to upload (minimum 127 bytes)
+
+        Returns:
+            FileMeta object containing root_cid and other metadata
+
+        Raises:
+            ValueError: If data is less than 127 bytes (Akave minimum)
+            NotImplementedError: If SDK doesn't support upload
+        """
+        if len(data) < 127:
+            raise ValueError(f"Data must be at least 127 bytes (got {len(data)}). Akave O3 minimum file size requirement.")
+
+        if hasattr(self.ipc, 'upload'):
+            file_obj = io.BytesIO(data)
+            file_meta = self.ipc.upload(None, bucket_name, key, file_obj)
+            return file_meta
+        else:
+            raise NotImplementedError("akavesdk IPC interface needs upload method")
 
     def close(self):
         self.sdk.close()
