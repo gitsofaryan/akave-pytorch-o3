@@ -10,6 +10,7 @@ Provides decentralized checkpoint storage using Akave O3 with:
 import io
 import json
 import logging
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -76,8 +77,9 @@ class O3CheckpointManager:
             RuntimeError: If upload fails
         """
         timestamp = datetime.now(timezone.utc).isoformat()
-        checkpoint_key = f"{self.prefix}epoch_{epoch:04d}_{timestamp.replace(':', '-')}.pt"
-        metadata_key = f"{self.prefix}epoch_{epoch:04d}_{timestamp.replace(':', '-')}.json"
+        unique = uuid.uuid4().hex[:8]
+        checkpoint_key = f"{self.prefix}epoch_{epoch:04d}_{timestamp.replace(':', '-')}_{unique}.pt"
+        metadata_key = f"{self.prefix}epoch_{epoch:04d}_{timestamp.replace(':', '-')}_{unique}.json"
 
         # Build checkpoint payload
         checkpoint_data = {
@@ -99,8 +101,10 @@ class O3CheckpointManager:
             checkpoint_bytes = checkpoint_bytes + b'\x00' * (127 - len(checkpoint_bytes))
 
         # Upload checkpoint
-        logger.info(f"Uploading checkpoint: {checkpoint_key} ({len(checkpoint_bytes)} bytes)")
-        file_meta = self.client.upload_object(self.bucket_name, checkpoint_key, checkpoint_bytes)
+        logger.info("Uploading checkpoint: %s (%d bytes)", checkpoint_key, len(checkpoint_bytes))
+        file_meta = self.client.upload_object(
+            self.bucket_name, checkpoint_key, checkpoint_bytes
+        )
 
         # Extract CID from file metadata
         cid = self._extract_cid(file_meta)
