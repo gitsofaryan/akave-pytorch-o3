@@ -12,7 +12,7 @@ import json
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 
@@ -77,9 +77,9 @@ class O3CheckpointManager:
             RuntimeError: If upload fails
         """
         timestamp = datetime.now(timezone.utc).isoformat()
-        unique = uuid.uuid4().hex[:8]
-        checkpoint_key = f"{self.prefix}epoch_{epoch:04d}_{timestamp.replace(':', '-')}_{unique}.pt"
-        metadata_key = f"{self.prefix}epoch_{epoch:04d}_{timestamp.replace(':', '-')}_{unique}.json"
+        uuid_str = uuid.uuid4().hex[:8]
+        checkpoint_key = f"{self.prefix}epoch_{epoch:04d}_{timestamp.replace(':', '-')}_{uuid_str}.pt"
+        metadata_key = f"{self.prefix}epoch_{epoch:04d}_{timestamp.replace(':', '-')}_{uuid_str}.json"
 
         # Build checkpoint payload
         checkpoint_data = {
@@ -130,7 +130,7 @@ class O3CheckpointManager:
             metadata_bytes = metadata_bytes + b' ' * (127 - len(metadata_bytes))
 
         self.client.upload_object(self.bucket_name, metadata_key, metadata_bytes)
-        logger.info(f"Checkpoint saved: epoch={epoch}, cid={cid}")
+        logger.info("Checkpoint saved: epoch=%s, cid=%s", epoch, cid)
 
         # Update lineage
         self._last_cid = cid
@@ -166,7 +166,7 @@ class O3CheckpointManager:
                 raise FileNotFoundError(f"No checkpoint found with CID: {cid}")
             checkpoint_key = metadata["checkpoint_key"]
 
-        logger.info(f"Loading checkpoint: {checkpoint_key}")
+        logger.info("Loading checkpoint: %s", checkpoint_key)
         checkpoint_bytes = self.client.download_object(self.bucket_name, checkpoint_key)
 
         # Deserialize
@@ -175,11 +175,37 @@ class O3CheckpointManager:
 
         return checkpoint_data
 
+    def _parse_checkpoint_key_for_sort(self, metadata: Dict[str, Any]) -> Tuple[int, str, str]:
+        """Parse checkpoint_key into (epoch, timestamp, uuid) for deterministic ordering.
+
+        Key format: {prefix}epoch_{epoch:04d}_{timestamp}_{uuid}.pt
+        Returns (epoch, timestamp_str, uuid_str); on parse failure returns (epoch, "", "").
+        """
+        key = metadata.get("checkpoint_key") or ""
+        epoch = metadata.get("epoch", 0)
+        if not key or not isinstance(key, str):
+            return (epoch, "", "")
+        base = key
+        if self.prefix and base.startswith(self.prefix):
+            base = base[len(self.prefix) :]
+        base = base.rstrip(".pt").rstrip(".json")
+        parts = base.split("_")
+        if len(parts) >= 4 and parts[0] == "epoch":
+            try:
+                epoch = int(parts[1])
+                ts = "_".join(parts[2:-1])
+                uuid = parts[-1]
+                return (epoch, ts, uuid)
+            except (ValueError, IndexError):
+                pass
+        return (epoch, "", "")
+
     def list_checkpoints(self) -> List[Dict[str, Any]]:
         """List all checkpoint metadata in the bucket.
 
         Returns:
-            List of metadata dictionaries, sorted by epoch (descending)
+            List of metadata dictionaries, sorted by (epoch, timestamp, uuid) descending
+            so the latest checkpoint (same epoch or higher) is first.
         """
         files = self.client.list_objects(self.bucket_name, prefix=self.prefix)
         metadata_files = [f for f in files if hasattr(f, 'name') and f.name.endswith('.json')]
@@ -191,13 +217,15 @@ class O3CheckpointManager:
                 metadata = json.loads(data.decode('utf-8').rstrip('\x00 '))
                 checkpoints.append(metadata)
             except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                logger.warning(f"Skipping malformed metadata {f.name}: {e}")
+                logger.warning("Skipping malformed metadata %s: %s", f.name, e)
             except Exception:
-                logger.exception(f"Failed to fetch metadata {f.name}")
+                logger.exception("Failed to fetch metadata %s", f.name)
                 raise
 
-        # Sort by epoch descending
-        checkpoints.sort(key=lambda x: x.get("epoch", 0), reverse=True)
+        checkpoints.sort(
+            key=lambda x: self._parse_checkpoint_key_for_sort(x),
+            reverse=True,
+        )
         return checkpoints
 
     def get_latest_metadata(self) -> Optional[Dict[str, Any]]:
@@ -225,12 +253,17 @@ class O3CheckpointManager:
     ) -> int:
         """Resume training from the latest checkpoint.
 
+        Loads model (and optionally optimizer) state from the latest checkpoint.
+        Returns the next epoch to run so the training loop does not replay the
+        last completed epoch.
+
         Args:
             model: PyTorch model to load state into
             optimizer: Optional optimizer to restore state
 
         Returns:
-            Epoch number to resume from (0 if no checkpoint found)
+            Next epoch to run (0 if no checkpoint found). Use as start_epoch in
+            ``for epoch in range(start_epoch, num_epochs):``.
         """
         try:
             checkpoint = self.load_checkpoint()
@@ -239,9 +272,9 @@ class O3CheckpointManager:
             if optimizer is not None and "optimizer_state_dict" in checkpoint:
                 optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
 
-            epoch = checkpoint.get("epoch", 0)
-            logger.info(f"Resumed training from epoch {epoch}")
-            return epoch
+            saved_epoch = checkpoint.get("epoch", 0)
+            logger.info("Resumed from checkpoint at epoch %d; next epoch %d", saved_epoch, saved_epoch + 1)
+            return saved_epoch + 1
 
         except FileNotFoundError:
             logger.info("No checkpoint found, starting from scratch")

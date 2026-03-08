@@ -1,9 +1,10 @@
-"""MNIST training and checkpointing using Akave O3."""
+"""MNIST training with O3Dataset and O3CheckpointManager."""
 
 import argparse
 import io
 import logging
 import os
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,8 +41,6 @@ class TrainConfig:
 
 
 class SimpleMNISTModel(nn.Module):
-    """A small CNN suitable for MNIST."""
-
     def __init__(self) -> None:
         super().__init__()
         self.conv1 = nn.Conv2d(1, 32, 3, 1)
@@ -67,29 +66,22 @@ class SimpleMNISTModel(nn.Module):
 
 
 def mnist_o3_transform(data: bytes) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Transform raw O3 bytes into (image_tensor, label_tensor).
-
-    Supports either a tuple (image, label) or a dict with "image" and "label".
-    """
+    """Deserialize one MNIST sample from O3 (objects produced by this script)."""
     buffer = io.BytesIO(data)
-    obj = torch.load(buffer, weights_only=False)
+    obj = torch.load(buffer, weights_only=False)  # MNIST payload is our own format
 
     if isinstance(obj, dict):
         image = obj.get("image")
         label = obj.get("label")
     else:
-        # Assume tuple-like: (image, label)
         image, label = obj
 
     if not torch.is_tensor(image):
         raise TypeError("Expected image tensor in O3 object")
-
-    # Ensure channel dimension is present: (1, 28, 28)
     if image.ndim == 2:
         image = image.unsqueeze(0)
 
     image = image.to(dtype=torch.float32) / 255.0
-    # Standard MNIST normalization
     mean, std = 0.1307, 0.3081
     image = (image - mean) / std
 
@@ -98,12 +90,15 @@ def mnist_o3_transform(data: bytes) -> Tuple[torch.Tensor, torch.Tensor]:
 
 
 def _list_keys(client: O3Client, bucket: str, prefix: str) -> List[str]:
-    files = client.list_objects(bucket, prefix=prefix)
+    objects = client.list_objects(bucket_name=bucket, prefix=prefix, limit=0)
     keys: List[str] = []
-    for f in files:
-        name = getattr(f, "name", None)
-        if name is not None:
-            keys.append(name)
+    for obj in objects:
+        if hasattr(obj, "name") and obj.name:
+            keys.append(obj.name)
+        elif hasattr(obj, "key") and obj.key:
+            keys.append(obj.key)
+        elif isinstance(obj, dict):
+            keys.append(obj.get("name", obj.get("key", str(obj))))
     keys.sort()
     if not keys:
         raise RuntimeError(f"No objects found in bucket '{bucket}' with prefix '{prefix}'")
@@ -116,25 +111,13 @@ def _filter_corrupt_keys(
     keys: List[str],
     delete_corrupt: bool = False,
 ) -> List[str]:
-    """Return only keys that can be deserialized by mnist_o3_transform.
-
-    If delete_corrupt is True and a key fails due to EOFError, we attempt to
-    delete it from O3 (best-effort) and do not include it in the returned list.
-    """
     def _delete_o3_object(key: str) -> None:
-        ipc = client.ipc
-        for name in ("delete_file", "delete_object", "delete"):
-            if hasattr(ipc, name):
-                method = getattr(ipc, name)
-                try:
-                    # Signature is SDK-dependent; most variants accept (ctx, bucket, key)
-                    method(None, bucket, key)
-                    logger.info("Deleted corrupt object %s/%s", bucket, key)
-                    return
-                except Exception as e:  # noqa: BLE001
-                    logger.warning("Failed to delete %s/%s via %s: %s", bucket, key, name, e)
-                    return
-        logger.warning("SDK delete method not available; cannot delete %s/%s", bucket, key)
+        if not hasattr(client.ipc, "file_delete"):
+            return
+        try:
+            client.ipc.file_delete(None, bucket, key)
+        except Exception:  # best-effort delete; ignore
+            pass
 
     good: List[str] = []
     for key in keys:
@@ -142,13 +125,11 @@ def _filter_corrupt_keys(
         try:
             mnist_o3_transform(raw)
             good.append(key)
-        except EOFError as e:
-            logger.warning("Corrupt object %s: %s", key, e)
+        except EOFError:
             if delete_corrupt:
                 _delete_o3_object(key)
         except Exception as e:  # noqa: BLE001
-            # Other errors (e.g. unexpected format) are surfaced but do not trigger deletion
-            logger.warning("Failed to deserialize object %s: %s", key, e)
+            logger.warning("Deserialize failed %s: %s", key, e)
     return good
 
 
@@ -160,7 +141,6 @@ def get_o3_data_loaders(
     test_prefix: str,
     delete_corrupt: bool = False,
 ) -> Tuple[DataLoader, DataLoader]:
-    """Create MNIST train/test loaders backed by O3Dataset."""
     train_keys = _list_keys(client, data_bucket, train_prefix)
     test_keys = _list_keys(client, data_bucket, test_prefix)
 
@@ -213,7 +193,6 @@ def upload_mnist_to_o3(
     local_dir: str,
     upload_limit: Optional[int] = None,
 ) -> None:
-    """Download MNIST locally (if needed) and upload samples to O3."""
     try:
         from torchvision import datasets, transforms
     except ImportError as e:
@@ -231,21 +210,21 @@ def upload_mnist_to_o3(
     test_ds = datasets.MNIST(local_dir, train=False, download=True, transform=transform)
 
     def _upload_split(dataset, prefix: str, split_name: str) -> None:
-        # Discover existing objects so we can skip already-uploaded files
         try:
-            existing_files = client.list_objects(data_bucket, prefix=prefix)
-            existing_keys = {
-                getattr(f, "name", None)
-                for f in existing_files
-                if getattr(f, "name", None) is not None
-            }
+            existing_objs = client.list_objects(bucket_name=data_bucket, prefix=prefix, limit=0)
+            existing_keys = set()
+            for obj in existing_objs:
+                if hasattr(obj, "name") and obj.name:
+                    existing_keys.add(obj.name)
+                elif hasattr(obj, "key") and obj.key:
+                    existing_keys.add(obj.key)
         except Exception:
             existing_keys = set()
 
+        uploaded_count = 0
         for idx, (image, label) in enumerate(dataset):
             if upload_limit is not None and idx >= upload_limit:
                 break
-            # image: [1, 28, 28] in [0, 1] float32 -> uint8 [0, 255]
             img_uint8 = (image * 255.0).to(torch.uint8)
             obj = {"image": img_uint8, "label": int(label)}
             buf = io.BytesIO()
@@ -254,6 +233,7 @@ def upload_mnist_to_o3(
 
             key = f"{prefix}{idx:06d}.pt"
             if key in existing_keys:
+                uploaded_count += 1
                 continue
 
             uploaded = False
@@ -270,21 +250,18 @@ def upload_mnist_to_o3(
                         if attempt < 4:
                             time.sleep(2 ** attempt)
                             continue
-                        logger.warning("Skip %s after retries: %s", key, e)
                         break
                     raise
-                except RetryError as e:
+                except RetryError:
                     if attempt < 4:
                         time.sleep(2 ** attempt)
                         continue
-                    logger.warning("Skip %s after retries: %s", key, e)
                     break
 
-            if not uploaded:
-                continue
+            if uploaded:
+                uploaded_count += 1
 
-        n = idx + 1
-        logger.info("%s: %d samples", split_name, n)
+        logger.info("%s: %d samples", split_name, uploaded_count)
 
     _upload_split(train_ds, train_prefix, "train")
     _upload_split(test_ds, test_prefix, "test")
@@ -313,9 +290,7 @@ def train_one_epoch(
 
         running_loss += loss.item()
 
-    avg_loss = running_loss / max(len(train_loader), 1)
-    logger.info("Epoch %d avg loss: %.4f", epoch, avg_loss)
-    return avg_loss
+    return running_loss / max(len(train_loader), 1)
 
 
 def evaluate(
@@ -336,10 +311,8 @@ def evaluate(
             pred = output.argmax(dim=1, keepdim=True)
             correct += pred.eq(target.view_as(pred)).sum().item()
 
-    test_loss /= max(len(test_loader.dataset), 1)
-    accuracy = 100.0 * correct / max(len(test_loader.dataset), 1)
-    logger.info("Test set: Average loss: %.4f, Accuracy: %.2f%%", test_loss, accuracy)
-    return test_loss, accuracy
+    n = max(len(test_loader.dataset), 1)
+    return test_loss / n, 100.0 * correct / n
 
 
 def parse_args() -> argparse.Namespace:
@@ -446,7 +419,6 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    # Load .env from repo root or cwd so AKAVE_PRIVATE_KEY etc. are set
     if load_dotenv is not None:
         for path in (Path(__file__).resolve().parent.parent / ".env", Path.cwd() / ".env"):
             if path.exists():
@@ -455,7 +427,7 @@ def main() -> None:
 
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        format="%(asctime)s - %(levelname)s - %(message)s",
     )
 
     args = parse_args()
@@ -472,134 +444,114 @@ def main() -> None:
             "Training requires --o3-checkpoint-bucket."
         )
 
-    # Basic AKAVE_PRIVATE_KEY check to give a clearer error before SDK init.
     if not os.getenv("AKAVE_PRIVATE_KEY"):
-        raise RuntimeError(
-            "AKAVE_PRIVATE_KEY environment variable is not set. "
-            "Please export your Akave private key before running this script."
-        )
+        print("Error: AKAVE_PRIVATE_KEY environment variable not set", file=sys.stderr)
+        sys.exit(1)
 
     client = O3Client()
+    try:
+        if args.upload_mnist:
+            upload_mnist_to_o3(
+                client=client,
+                data_bucket=args.o3_data_bucket,
+                train_prefix=args.o3_train_prefix,
+                test_prefix=args.o3_test_prefix,
+                local_dir=args.mnist_local_dir,
+                upload_limit=args.upload_limit,
+            )
 
-    if args.upload_mnist:
-        upload_mnist_to_o3(
+        if args.upload_only:
+            return
+
+        use_cuda = not args.no_cuda and torch.cuda.is_available()
+        device = torch.device("cuda" if use_cuda else "cpu")
+
+        config = TrainConfig(
+            batch_size=args.batch_size,
+            epochs=args.epochs,
+            lr=args.lr,
+        )
+
+        torch.manual_seed(config.seed)
+        if use_cuda:
+            torch.cuda.manual_seed_all(config.seed)
+
+        train_loader, test_loader = get_o3_data_loaders(
             client=client,
+            config=config,
             data_bucket=args.o3_data_bucket,
             train_prefix=args.o3_train_prefix,
             test_prefix=args.o3_test_prefix,
-            local_dir=args.mnist_local_dir,
-            upload_limit=args.upload_limit,
+            delete_corrupt=args.delete_corrupt,
         )
 
-    if args.upload_only:
-        client.close()
-        return
+        model = SimpleMNISTModel().to(device)
+        optimizer = optim.SGD(model.parameters(), lr=config.lr, momentum=config.momentum)
 
-    use_cuda = not args.no_cuda and torch.cuda.is_available()
-    device = torch.device("cuda" if use_cuda else "cpu")
+        buckets = client.list_buckets()
+        if args.o3_checkpoint_bucket not in [getattr(b, "name", None) for b in buckets]:
+            client.create_bucket(args.o3_checkpoint_bucket)
+        ckpt_manager = O3CheckpointManager(
+            client=client,
+            bucket_name=args.o3_checkpoint_bucket,
+            prefix=args.o3_prefix,
+        )
 
-    config = TrainConfig(
-        batch_size=args.batch_size,
-        epochs=args.epochs,
-        lr=args.lr,
-    )
+        start_epoch = ckpt_manager.resume_training(model, optimizer)
 
-    torch.manual_seed(config.seed)
-    if use_cuda:
-        torch.cuda.manual_seed_all(config.seed)
+        for epoch in range(start_epoch, config.epochs):
+            train_loss = train_one_epoch(model, device, train_loader, optimizer, epoch, config)
+            test_loss, accuracy = evaluate(model, device, test_loader)
+            metrics = {
+                "train_loss": float(train_loss),
+                "test_loss": float(test_loss),
+                "accuracy": float(accuracy),
+            }
 
-    train_loader, test_loader = get_o3_data_loaders(
-        client=client,
-        config=config,
-        data_bucket=args.o3_data_bucket,
-        train_prefix=args.o3_train_prefix,
-        test_prefix=args.o3_test_prefix,
-        delete_corrupt=args.delete_corrupt,
-    )
+            def _err_text(exc: BaseException) -> str:
+                out = []
+                while exc:
+                    out.append(str(exc))
+                    exc = getattr(exc, "__cause__", None)
+                return " ".join(out).lower()
 
-    model = SimpleMNISTModel().to(device)
-    optimizer = optim.SGD(model.parameters(), lr=config.lr, momentum=config.momentum)
+            def _drop_epoch_keys(bucket: str, prefix: str, ep: int) -> None:
+                pat = f"epoch_{ep:04d}_"
+                try:
+                    for obj in client.list_objects(bucket_name=bucket, prefix=prefix, limit=0):
+                        n = getattr(obj, "name", None) or getattr(obj, "key", None)
+                        if n and pat in n and hasattr(client.ipc, "file_delete"):
+                            try:
+                                client.ipc.file_delete(None, bucket, n)
+                            except Exception:  # best-effort delete; ignore
+                                pass
+                except Exception:  # list/delete best-effort; ignore
+                    pass
 
-    buckets = client.list_buckets()
-    if args.o3_checkpoint_bucket not in [getattr(b, "name", None) for b in buckets]:
-        client.create_bucket(args.o3_checkpoint_bucket)
-    ckpt_manager = O3CheckpointManager(
-        client=client,
-        bucket_name=args.o3_checkpoint_bucket,
-        prefix=args.o3_prefix,
-    )
-
-    # Try to resume from latest checkpoint if available.
-    start_epoch = ckpt_manager.resume_training(model, optimizer)
-
-    for epoch in range(start_epoch, config.epochs):
-        train_loss = train_one_epoch(model, device, train_loader, optimizer, epoch, config)
-        test_loss, accuracy = evaluate(model, device, test_loader)
-
-        metrics = {
-            "train_loss": float(train_loss),
-            "test_loss": float(test_loss),
-            "accuracy": float(accuracy),
-        }
-
-        # Retry save: on "file already exists" delete existing keys for this epoch and retry; on rate limit sleep and retry.
-        def _exception_messages(exc: BaseException) -> str:
-            parts = []
-            while exc is not None:
-                parts.append(str(exc))
-                exc = getattr(exc, "__cause__", None)
-            return " ".join(parts).lower()
-
-        def _delete_checkpoint_keys_for_epoch(bucket: str, prefix: str, epoch: int) -> None:
-            """Delete any checkpoint/metadata keys for this epoch (e.g. orphaned from partial upload)."""
-            epoch_pattern = f"epoch_{epoch:04d}_"
-            try:
-                objects = client.list_objects(bucket, prefix=prefix, limit=0)
-                for obj in objects:
-                    name = getattr(obj, "name", None)
-                    if name and epoch_pattern in name:
-                        try:
-                            client.delete_object(bucket, name)
-                            logger.warning("Deleted existing checkpoint key (reupload): %s", name)
-                        except Exception as del_err:
-                            logger.warning("Delete failed for %s: %s", name, del_err)
-            except Exception as list_err:
-                logger.warning("List/delete checkpoint keys failed: %s", list_err)
-
-        for attempt in range(3):
-            try:
-                cid = ckpt_manager.save_checkpoint(
-                    state_dict=model.state_dict(),
-                    epoch=epoch,
-                    metrics=metrics,
-                    optimizer_state=optimizer.state_dict(),
-                )
-                logger.info("Epoch %d checkpoint CID: %s", epoch, cid)
-                break
-            except Exception as e:
-                err_str = _exception_messages(e)
-                if "file already exists" in err_str and attempt < 2:
-                    logger.warning(
-                        "Checkpoint upload failed (file already exists); deleting existing keys for epoch and retrying.",
+            max_attempts = 5
+            for attempt in range(max_attempts):
+                try:
+                    cid = ckpt_manager.save_checkpoint(
+                        model.state_dict(), epoch, metrics=metrics,
+                        optimizer_state=optimizer.state_dict(),
                     )
-                    _delete_checkpoint_keys_for_epoch(
-                        ckpt_manager.bucket_name, ckpt_manager.prefix, epoch
-                    )
-                    continue
-                retriable = "rate" in err_str or "resource_exhausted" in err_str
-                if attempt < 2 and retriable:
-                    wait = 30 * (attempt + 1)
-                    logger.warning(
-                        "Checkpoint save failed (%s); retrying in %ds.",
-                        e,
-                        wait,
-                    )
-                    time.sleep(wait)
-                else:
+                    logger.info("Epoch %d loss=%.4f acc=%.2f%% cid=%s", epoch, train_loss, accuracy, cid)
+                    break
+                except Exception as e:
+                    txt = _err_text(e)
+                    if "file already exists" in txt and attempt < max_attempts - 1:
+                        _drop_epoch_keys(ckpt_manager.bucket_name, ckpt_manager.prefix, epoch)
+                        continue
+                    if ("rate" in txt or "resource_exhausted" in txt) and attempt < max_attempts - 1:
+                        wait = 120 * (attempt + 1)
+                        logger.info("Rate limit; waiting %ds before retry %d/%d", wait, attempt + 1, max_attempts)
+                        time.sleep(wait)
+                        continue
                     raise
 
-    evaluate(model, device, test_loader)
-    client.close()
+        evaluate(model, device, test_loader)
+    finally:
+        client.close()
 
 
 if __name__ == "__main__":

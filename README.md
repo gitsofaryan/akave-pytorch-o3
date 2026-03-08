@@ -36,9 +36,14 @@ With the virtual environment active:
 pip install --upgrade pip
 pip install -r requirements.txt
 pip install -e .
+```
 
-# For examples that use torchvision / PIL (e.g. train_mnist.py)
-pip install torchvision pillow
+Core install gives you `O3Client`, `O3Dataset`, and `O3CheckpointManager`.
+
+**To run the MNIST example** (`examples/train_mnist.py`), install the optional extras (python-dotenv, torchvision):
+
+```bash
+pip install -e ".[examples]"
 ```
 
 The core requirements are:
@@ -168,6 +173,8 @@ If you re-run the script with the same buckets and prefixes, it will:
 
 - Discover the latest checkpoint via `O3CheckpointManager`.
 - Resume training from that epoch (including optimizer state).
+
+**Rate limits:** Large checkpoint uploads can hit O3/node rate limits (e.g. `RESOURCE_EXHAUSTED` or "rate limit wait error ... exceeds limiter's burst" during chunk upload). The example retries up to 5 times with 2, 4, 6, 8 minute backoff when it detects rate-limit errors; on "file already exists" (e.g. after a partial upload) it deletes the orphaned key and retries. If rate limits persist, wait several minutes and re-run the script (it will resume from the last saved checkpoint), or save checkpoints less often (e.g. every N epochs).
 
 ---
 
@@ -338,6 +345,13 @@ debugging.
 - **Object size inference problems in `O3Dataset`**  
   - When object metadata does not contain a recognizable size field, a
     `ValueError` is raised with the key name to quickly surface the problem.
+
+- **Rate limits on checkpoint upload**  
+  - Uploading large checkpoints can trigger O3/node rate limits (gRPC
+    `RESOURCE_EXHAUSTED`, "rate limit" in errors). The MNIST example retries
+    with 2–8 minute backoff and, on "file already exists", deletes the partial
+    file and retries. If it still fails, wait and re-run; training resumes from
+    the latest checkpoint.
 
 For production training, you can integrate these logs into your existing
 observability stack (e.g. configure Python logging handlers to send to your
