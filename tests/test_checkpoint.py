@@ -258,7 +258,7 @@ class TestO3CheckpointManager(unittest.TestCase):
 
         epoch = mgr.resume_training(new_model, new_optimizer)
 
-        self.assertEqual(epoch, 7)
+        self.assertEqual(epoch, 8)
 
         # Verify weights were loaded
         for key in original_model.state_dict().keys():

@@ -178,7 +178,10 @@ class O3CheckpointManager:
     def _parse_checkpoint_key_for_sort(self, metadata: Dict[str, Any]) -> Tuple[int, str, str]:
         """Parse checkpoint_key into (epoch, timestamp, uuid) for deterministic ordering.
 
-        Key format: {prefix}epoch_{epoch:04d}_{timestamp}_{uuid}.pt
+        Key format: {prefix}epoch_{epoch:04d}_{timestamp}_{uuid}.pt (currently, this module only
+        creates .pt checkpoint keys and .json metadata keys). But in an extendable format
+        like {prefix}epoch_{epoch:04d}_{timestamp}_{uuid}.{suffix}.
+
         Returns (epoch, timestamp_str, uuid_str); on parse failure returns (epoch, "", "").
         """
         key = metadata.get("checkpoint_key") or ""
@@ -188,14 +191,17 @@ class O3CheckpointManager:
         base = key
         if self.prefix and base.startswith(self.prefix):
             base = base[len(self.prefix) :]
-        base = base.rstrip(".pt").rstrip(".json")
+        for suffix in (".json", ".pt"):
+            if base.endswith(suffix):
+                base = base[: -len(suffix)]
+                break
         parts = base.split("_")
         if len(parts) >= 4 and parts[0] == "epoch":
             try:
                 epoch = int(parts[1])
                 ts = "_".join(parts[2:-1])
-                uuid = parts[-1]
-                return (epoch, ts, uuid)
+                uuid_str = parts[-1]
+                return (epoch, ts, uuid_str)
             except (ValueError, IndexError):
                 pass
         return (epoch, "", "")

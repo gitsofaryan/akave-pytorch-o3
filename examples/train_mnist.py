@@ -110,14 +110,21 @@ def _filter_corrupt_keys(
     bucket: str,
     keys: List[str],
     delete_corrupt: bool = False,
+    scan: bool = True,
 ) -> List[str]:
     def _delete_o3_object(key: str) -> None:
         if not hasattr(client.ipc, "file_delete"):
             return
         try:
             client.ipc.file_delete(None, bucket, key)
-        except Exception:  # best-effort delete; ignore
-            pass
+        except Exception as e:  # best-effort delete
+            logger.debug("file_delete failed for %s: %s", key, e)
+
+    if not scan:
+        logger.debug(
+            "Skipping corrupt-key scan; callers can rely on O3Dataset.__getitem__ retry semantics"
+        )
+        return keys
 
     good: List[str] = []
     for key in keys:
@@ -279,7 +286,7 @@ def train_one_epoch(
     criterion = nn.NLLLoss()
     running_loss = 0.0
 
-    for batch_idx, (data, target) in enumerate(train_loader):
+    for _batch_idx, (data, target) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
 
         optimizer.zero_grad()
@@ -289,6 +296,15 @@ def train_one_epoch(
         optimizer.step()
 
         running_loss += loss.item()
+
+        if _batch_idx % config.log_interval == 0:
+            logger.info(
+                "Epoch %d [%d/%d] loss=%.4f",
+                epoch,
+                _batch_idx,
+                len(train_loader),
+                loss.item(),
+            )
 
     return running_loss / max(len(train_loader), 1)
 
@@ -313,6 +329,28 @@ def evaluate(
 
     n = max(len(test_loader.dataset), 1)
     return test_loss / n, 100.0 * correct / n
+
+
+def _err_text(exc: BaseException) -> str:
+    out = []
+    while exc:
+        out.append(str(exc))
+        exc = getattr(exc, "__cause__", None)
+    return " ".join(out).lower()
+
+
+def _drop_epoch_keys(client: O3Client, bucket: str, prefix: str, ep: int) -> None:
+    pat = f"epoch_{ep:04d}_"
+    try:
+        for obj in client.list_objects(bucket_name=bucket, prefix=prefix, limit=0):
+            n = getattr(obj, "name", None) or getattr(obj, "key", None)
+            if n and pat in n and hasattr(client.ipc, "file_delete"):
+                try:
+                    client.ipc.file_delete(None, bucket, n)
+                except Exception as e:  # best-effort delete
+                    logger.debug("file_delete failed for %s: %s", n, e)
+    except Exception:  # list/delete best-effort; ignore
+        pass
 
 
 def parse_args() -> argparse.Namespace:
@@ -508,26 +546,6 @@ def main() -> None:
                 "accuracy": float(accuracy),
             }
 
-            def _err_text(exc: BaseException) -> str:
-                out = []
-                while exc:
-                    out.append(str(exc))
-                    exc = getattr(exc, "__cause__", None)
-                return " ".join(out).lower()
-
-            def _drop_epoch_keys(bucket: str, prefix: str, ep: int) -> None:
-                pat = f"epoch_{ep:04d}_"
-                try:
-                    for obj in client.list_objects(bucket_name=bucket, prefix=prefix, limit=0):
-                        n = getattr(obj, "name", None) or getattr(obj, "key", None)
-                        if n and pat in n and hasattr(client.ipc, "file_delete"):
-                            try:
-                                client.ipc.file_delete(None, bucket, n)
-                            except Exception:  # best-effort delete; ignore
-                                pass
-                except Exception:  # list/delete best-effort; ignore
-                    pass
-
             max_attempts = 5
             for attempt in range(max_attempts):
                 try:
@@ -540,7 +558,7 @@ def main() -> None:
                 except Exception as e:
                     txt = _err_text(e)
                     if "file already exists" in txt and attempt < max_attempts - 1:
-                        _drop_epoch_keys(ckpt_manager.bucket_name, ckpt_manager.prefix, epoch)
+                        _drop_epoch_keys(client, ckpt_manager.bucket_name, ckpt_manager.prefix, epoch)
                         continue
                     if ("rate" in txt or "resource_exhausted" in txt) and attempt < max_attempts - 1:
                         wait = 120 * (attempt + 1)
@@ -549,7 +567,8 @@ def main() -> None:
                         continue
                     raise
 
-        evaluate(model, device, test_loader)
+        final_loss, final_acc = evaluate(model, device, test_loader)
+        logger.info("Final eval loss=%.4f acc=%.2f%%", final_loss, final_acc)
     finally:
         client.close()
 
