@@ -57,7 +57,17 @@ class LRUCache:
     def clear(self) -> None:
         with self.lock:
             self.cache.clear()
-    
+
+    def delete(self, key: str) -> bool:
+        """Remove a single key from the cache. Returns True if it was present."""
+        if self.max_size == 0:
+            return False
+        with self.lock:
+            if key in self.cache:
+                del self.cache[key]
+                return True
+            return False
+
     def size(self) -> int:
         with self.lock:
             return len(self.cache)
@@ -143,24 +153,39 @@ class O3Dataset(Dataset):
                 raise RuntimeError(f"Failed to get metadata for object {key}: {e}") from e
     
     def _get_object_size(self, key: str) -> int:
+        """Extract byte size from SDK file_info result. Prefer "actual_size" over "encoded_size" so range requests read the correct number of bytes."""
         info = self.client.get_object_info(self.bucket_name, key)
-        
-        if hasattr(info, 'size') and info.size is not None:
-            return int(info.size)
-        
-        for attr_name in ['Size', 'file_size', 'length', 'fileLength']:
-            if hasattr(info, attr_name):
-                size = getattr(info, attr_name)
-                if size is not None:
-                    return int(size)
-        
+
+        def get_val(attr: str):
+            if isinstance(info, dict):
+                return info.get(attr)
+            return getattr(info, attr, None) if hasattr(info, attr) else None
+
+        # Prefer actual_size so we don't request past the real payload (encoded_size can be larger)
+        for attr in ("actual_size", "size", "Size", "file_size", "length", "fileLength", "encoded_size"):
+            val = get_val(attr)
+            if val is not None:
+                try:
+                    return int(val)
+                except (TypeError, ValueError):
+                    pass
+
+        # Fallback: use any numeric attribute whose name suggests size/length
+        if hasattr(info, "__dict__"):
+            for attr_name, val in vars(info).items():
+                if val is not None and ("size" in attr_name.lower() or "length" in attr_name.lower()):
+                    try:
+                        return int(val)
+                    except (TypeError, ValueError):
+                        pass
         if isinstance(info, dict):
-            size = info.get('size')
-            if size is None:
-                size = info.get('Size')
-            if size is not None:
-                return int(size)
-        
+            for k, v in info.items():
+                if v is not None and ("size" in k.lower() or "length" in k.lower()):
+                    try:
+                        return int(v)
+                    except (TypeError, ValueError):
+                        pass
+
         raise ValueError(f"Could not extract size from object info for {key}")
     
     def _get_cache_key(self, key: str, chunk_idx: int) -> str:
@@ -205,8 +230,24 @@ class O3Dataset(Dataset):
             os.replace(tmp_path, disk_path)
         
         return chunk_data
-    
-    
+
+    def _evict_chunk_cache_for_key(self, key: str) -> None:
+        """Remove all chunk cache entries (memory and disk) for the given object key."""
+        metadata = self._object_metadata.get(key)
+        if not metadata:
+            return
+        num_chunks = metadata["num_chunks"]
+        for chunk_idx in range(num_chunks):
+            cache_key = self._get_cache_key(key, chunk_idx)
+            self.cache.delete(cache_key)
+            if self.cache_dir:
+                disk_path = self._get_disk_cache_path(cache_key)
+                try:
+                    if disk_path.exists():
+                        disk_path.unlink()
+                except (FileNotFoundError, PermissionError, OSError):
+                    pass
+
     def __len__(self) -> int:
         return len(self.object_keys)
     
@@ -232,7 +273,18 @@ class O3Dataset(Dataset):
         object_data = self._load_full_object(key)
         
         if self.transform:
-            data = self.transform(object_data)
+            try:
+                data = self.transform(object_data)
+            except EOFError:
+                raw = self.client.download_object(self.bucket_name, key)
+                try:
+                    data = self.transform(raw)
+                except EOFError:
+                    raise RuntimeError(
+                        f"Object {key!r} is truncated or corrupted on O3 (torch.load EOFError). "
+                        "Re-upload that key or remove it from the object list."
+                    ) from None
+                self._evict_chunk_cache_for_key(key)
             if self.target_transform:
                 return data, self.target_transform(data)
             return data
