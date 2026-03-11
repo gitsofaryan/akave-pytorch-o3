@@ -1,3 +1,9 @@
 torch>=2.0.0
+torchvision>=0.15.0
 akavesdk @ git+https://github.com/d4v1d03/akavesdk-py.git
 tenacity>=8.2.0
+numpy>=1.24.0
+pandas>=2.0.0
+plotly>=5.17.0
+streamlit>=1.28.0
+python-dotenv>=1.0.0
