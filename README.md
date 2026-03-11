@@ -142,8 +142,9 @@ streamlit run app.py
 | **Datasets** | Browse bundled datasets, preview tensors |
 | **Training** | Train job status, live logs, checkpoint summary |
 | **Checkpoints** | All checkpoints, CID lineage graph, resume options |
+| **Buckets** | View all O3 buckets, create new buckets, manage storage |
 | **API Docs** | API reference for O3Client, O3Dataset, O3CheckpointManager |
-| **Settings** | Connect wallet, configure O3 buckets |
+| **Settings** | Connect wallet, configure O3 connection parameters |
 
 ### Python: Direct API
 ```python
@@ -203,6 +204,159 @@ Large checkpoint uploads may hit O3/node rate limits (gRPC `RESOURCE_EXHAUSTED`)
 **If limits persist**: Wait several minutes and re-run, or reduce checkpoint frequency.
 
 ---\n\n## 📚 API Reference\n\n### O3Client — Connect & Stream\n\n```python\nfrom pytorch_o3 import O3Client\n\nclient = O3Client()  # uses AKAVE_PRIVATE_KEY env var\nclient = O3Client(private_key=\"...\", ipc_address=\"connect.akave.ai:5500\")\n```\n\n| Method | Purpose |\n|--------|----------|\n| `list_buckets()` | List all available buckets |\n| `list_objects(bucket, prefix=\"\", limit=1000)` | List objects in a bucket |\n| `get_object_info(bucket, key)` | Get object metadata (size, etc.) |\n| `download_object(bucket, key)` | Download full object → bytes |\n| `download_object_range(bucket, key, start, end)` | Download byte range |\n| `upload_object(bucket, key, data: bytes)` → CID | Upload object, get back CID |\n| `close()` | Close SDK resources |\n\n**Errors**: `O3AuthError` (auth issues), `NotImplementedError` (missing SDK features)\n\n### O3Dataset — Stream to PyTorch\n\n```python\nfrom pytorch_o3 import O3Dataset\nfrom torch.utils.data import DataLoader\n\ndataset = O3Dataset(\n    client=client,\n    bucket_name=\"training-data\",\n    object_keys=[\"sample_0.pt\", \"sample_1.pt\", ...],\n    chunk_size=1024 * 1024,     # 1 MB chunks\n    cache_size=100,              # LRU memory cache\n    transform=None,              # Optional: bytes → sample\n    cache_dir=\"/scratch/o3-cache\" # Optional: persistent disk cache\n)\n\nloader = DataLoader(dataset, batch_size=32, num_workers=4)\nfor batch_x, batch_y in loader:\n    # batch_x, batch_y automatically streamed from O3\n    pass\n```\n\n**Features**:\n- Two-tier caching: LRU memory + SHA256-keyed disk cache\n- Per-worker O3Client (multiprocessing-safe)\n- Automatic chunk fetching on demand\n- Configurable chunk size and cache capacity\n\n**Errors**: `ValueError` (empty keys, bad chunk_size), `RuntimeError` (metadata issues)\n\n### O3CheckpointManager — Versioned Snapshots\n\n```python\nfrom pytorch_o3.checkpoint import O3CheckpointManager\n\nckpt_mgr = O3CheckpointManager(client, bucket_name=\"checkpoints\")\n\n# Save checkpoint with CID versioning\ncid = ckpt_mgr.save_checkpoint(\n    state_dict=model.state_dict(),\n    epoch=5,\n    optimizer_state=optimizer.state_dict(),\n    metrics={\"loss\": 0.123, \"accuracy\": 0.95}\n)\nprint(f\"Checkpoint saved → CID: {cid}\")\n\n# Load latest checkpoint into model\nepoch_to_resume = ckpt_mgr.resume_training(model, optimizer)\nfor epoch in range(epoch_to_resume, total_epochs):\n    # continue training from epoch_to_resume\n    pass\n\n# List all checkpoints\nall_ckpts = ckpt_mgr.list_checkpoints()  # sorted by epoch desc\n\n# Or load specific checkpoint by CID\nckpt_data = ckpt_mgr.load_checkpoint(cid=\"bafy...\")\n```\n\n| Method | Returns | Purpose |\n|--------|---------|----------|\n| `save_checkpoint(...)` | `str` (CID) | Save state, get content-addressed ID |\n| `load_checkpoint(cid=None)` | `dict` | Load by CID or latest if None |\n| `list_checkpoints()` | `list[dict]` | All metadata records (epoch desc) |\n| `get_latest_metadata()` | `dict \\| None` | Newest checkpoint metadata |\n| `get_latest_cid()` | `str \\| None` | Newest checkpoint CID |\n| `resume_training(model, optimizer=None)` | `int` (epoch) | Load latest + return resume epoch |\n\n**Errors**: `RuntimeError` (CID extraction, metadata parsing), upload errors propagate
+
+---
+
+## 🎯 Running Specific Functions
+
+### O3Client Functions
+
+**List all buckets:**
+```python
+from pytorch_o3 import O3Client
+
+client = O3Client()
+buckets = client.list_buckets()
+for bucket in buckets:
+    print(bucket.name)
+```
+
+**List objects in a bucket:**
+```python
+objects = client.list_objects("my-bucket", prefix="models/", limit=100)
+for obj in objects:
+    print(obj.name)
+```
+
+**Get object info (size, metadata):**
+```python
+info = client.get_object_info("my-bucket", "my-model.pt")
+print(f"Size: {info.size} bytes")
+```
+
+**Download full object:**
+```python
+data = client.download_object("my-bucket", "my-model.pt")
+# data is bytes
+import torch
+model_state = torch.load(BytesIO(data))
+```
+
+**Download byte range (streaming):**
+```python
+# Only download bytes 0-1000 (useful for large files)
+chunk = client.download_object_range("my-bucket", "dataset.pt", start=0, end=1000)
+```
+
+**Upload object and get CID:**
+```python
+import torch
+model_bytes = torch.save(model.state_dict(), BytesIO()).getvalue()
+file_meta = client.upload_object("my-bucket", "model_v1.pt", model_bytes)
+cid = file_meta.root_cid
+print(f"Uploaded with CID: {cid}")
+```
+
+### O3Dataset Functions
+
+**Create dataset with transforms:**
+```python
+from pytorch_o3 import O3Dataset
+import torch
+
+def load_tensor(bytes_data):
+    """Custom transform: bytes → torch.Tensor"""
+    return torch.load(BytesIO(bytes_data))
+
+dataset = O3Dataset(
+    client=client,
+    bucket_name="training-data",
+    object_keys=["sample_0.pt", "sample_1.pt"],
+    transform=load_tensor,  # Applied to each sample
+    cache_size=50,          # Keep 50 chunks in memory
+)
+
+# Access single sample
+sample = dataset[0]
+
+# Or use with DataLoader
+from torch.utils.data import DataLoader
+loader = DataLoader(dataset, batch_size=32, num_workers=2)
+```
+
+**Check cache statistics:**
+```python
+stats = dataset.get_cache_stats()
+print(f"Memory cache: {stats['memory_cache_size']}/{stats['memory_cache_max']}")
+print(f"Disk cache files: {stats['disk_cache_files']}")
+```
+
+### O3CheckpointManager Functions
+
+**List all checkpoints:**
+```python
+from pytorch_o3 import O3CheckpointManager
+
+ckpt_mgr = O3CheckpointManager(client, "checkpoint-bucket")
+all_checkpoints = ckpt_mgr.list_checkpoints()  # sorted by epoch (newest first)
+for ckpt in all_checkpoints:
+    print(f"Epoch {ckpt['epoch']}: CID={ckpt['root_cid']}, Metrics={ckpt['metrics']}")
+```
+
+**Get latest checkpoint info:**
+```python
+latest = ckpt_mgr.get_latest_metadata()
+if latest:
+    print(f"Latest epoch: {latest['epoch']}")
+    print(f"Latest CID: {latest['root_cid']}")
+else:
+    print("No checkpoints found")
+```
+
+**Load specific checkpoint by CID:**
+```python
+cid = "bafy..."  # e.g., from lineage chain
+ckpt = ckpt_mgr.load_checkpoint(cid=cid)
+model.load_state_dict(ckpt["model_state_dict"])
+print(f"Loaded epoch {ckpt['epoch']}")
+```
+
+**Resume training (auto-detect latest):**
+```python
+start_epoch = ckpt_mgr.resume_training(model, optimizer)
+for epoch in range(start_epoch, total_epochs):
+    # Training continues from where it left off
+    pass
+```
+
+**Get CID lineage chain:**
+```python
+all_ckpts = ckpt_mgr.list_checkpoints()
+for ckpt in all_ckpts:
+    parent_cid = ckpt.get("parent_cid") or "Genesis"
+    print(f"Epoch {ckpt['epoch']}: {ckpt['root_cid'][:16]}... (parent: {parent_cid})")
+```
+
+### CLI: Run Specific Examples
+
+**Train on MNIST:**
+```bash
+python examples/train_mnist.py \
+  --o3-data-bucket mnist-data \
+  --o3-checkpoint-bucket checkpoints \
+  --epochs 5 \
+  --batch-size 32
+```
+
+**List commands from examples:**
+```bash
+python examples/train_mnist.py --help  # Show all CLI options
+```
+
+**Run milestone validation demo:**
+```bash
+python cli_animated_demo.py  # Validates all 4 GitHub milestones + runs 25 pytest tests
+```
 
 ---
 

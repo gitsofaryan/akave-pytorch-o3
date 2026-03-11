@@ -728,17 +728,18 @@ with st.sidebar:
         ("📦", "Datasets"),
         ("🤖", "Training"),
         ("💾", "Checkpoints"),
+        ("🪣", "Buckets"),
         ("📖", "API Docs"),
     ]
     for icon, label in nav_items:
         active = "active" if st.session_state.page == label else ""
-        if st.button(f"{icon}  {label}", key=f"nav_{label}", use_container_width=True):
+        if st.button(f"{icon}  {label}", key=f"nav_{label}", width='stretch'):
             st.session_state.page = label
             st.rerun()
 
     st.markdown("""<div style="margin-top:16px; font-size:11px; color:#a08070; font-weight:600; letter-spacing:0.5px; padding-left:16px;">SYSTEM</div>""", unsafe_allow_html=True)
 
-    if st.button("⚙️  Settings", key="nav_Settings", use_container_width=True):
+    if st.button("⚙️  Settings", key="nav_Settings", width='stretch'):
         st.session_state.page = "Settings"
         st.rerun()
 
@@ -768,7 +769,7 @@ def top_bar():
         """, unsafe_allow_html=True)
     with col2:
         if not st.session_state.connected:
-            if st.button("🔴 Connect Wallet", key="top_connect", use_container_width=True):
+            if st.button("🔴 Connect Wallet", key="top_connect", width='stretch'):
                 st.session_state.page = "Settings"
                 st.rerun()
         else:
@@ -1242,7 +1243,7 @@ def page_dashboard():
                     if is_selected:
                         st.markdown("<div style='padding:6px 0;'><span style='background:#3fb950; color:#000; padding:4px 12px; border-radius:4px; font-size:11px; font-weight:700;'>✓ ACTIVE</span></div>", unsafe_allow_html=True)
                     else:
-                        if st.button(f"➕ Add for Training", key=f"add_{ds_name}", use_container_width=True):
+                        if st.button(f"➕ Add for Training", key=f"add_{ds_name}", width='stretch'):
                             st.session_state.selected_dataset = ds_name
                             st.session_state.data_bucket = ds_name
                             st.rerun()
@@ -1273,11 +1274,11 @@ def page_dashboard():
 
         if st.session_state.training_running:
             st.markdown("""<div style="background:rgba(63,185,80,0.12); border:1px solid #3fb950; border-radius:8px; padding:10px 14px; font-size:13px; color:#3fb950; font-weight:600; text-align:center;">⏳ Training in progress...</div>""", unsafe_allow_html=True)
-            if st.button("⏹  Stop Training", key="stop_train", use_container_width=True):
+            if st.button("⏹  Stop Training", key="stop_train", width='stretch'):
                 st.session_state.stop_training = True
         else:
             can_start = st.session_state.selected_dataset is not None
-            if st.button("▶  Start Training", key="start_train", use_container_width=True, disabled=not can_start):
+            if st.button("▶  Start Training", key="start_train", width='stretch', disabled=not can_start):
                 if can_start:
                     st.session_state.training_running = True
                     st.session_state.training_done = False
@@ -1366,7 +1367,7 @@ def page_datasets():
         for name in ds_names:
             display = samples[name]["meta"].get("name", name)
             total = fmt_size(samples[name]["total_size"])
-            if st.button(f"📦 {display}  ({total})", key=f"ds_{name}", use_container_width=True):
+            if st.button(f"📦 {display}  ({total})", key=f"ds_{name}", width='stretch'):
                 st.session_state.data_bucket = name
                 st.rerun()
 
@@ -1450,7 +1451,7 @@ def page_datasets():
                         fig = plotly_go.Figure(data=plotly_go.Heatmap(z=vis, colorscale="Hot", showscale=False))
                         fig.update_layout(height=250, margin=dict(l=0, r=0, t=0, b=0), paper_bgcolor="#1c120c", plot_bgcolor="#1c120c",
                                           xaxis=dict(visible=False), yaxis=dict(visible=False, scaleanchor="x"))
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, width='stretch')
                     else:
                         st.image(vis / (vis.max() + 1e-8), caption=f"Sample {idx}", width=250)
             except Exception as e:
@@ -1466,7 +1467,7 @@ def page_datasets():
     if uploaded:
         for f in uploaded:
             st.success(f"✅ {f.name} ready ({f.size / 1e6:.1f} MB)")
-        if st.button("⬆️ Upload to O3 Bucket", use_container_width=True):
+        if st.button("⬆️ Upload to O3 Bucket", width='stretch'):
             with st.spinner("Uploading..."):
                 time.sleep(2)
             st.success("Upload complete!")
@@ -1511,7 +1512,7 @@ def page_training():
             st.markdown("""<div style="background:rgba(63,185,80,0.12); border:1px solid #3fb950; border-radius:8px; padding:10px 14px; font-size:13px; color:#3fb950; font-weight:600; text-align:center;">⏳ Training in progress...</div>""", unsafe_allow_html=True)
         else:
             can_start = st.session_state.selected_dataset is not None
-            if st.button("▶  Start Training", key="tr_start", use_container_width=True, disabled=not can_start):
+            if st.button("▶  Start Training", key="tr_start", width='stretch', disabled=not can_start):
                 st.session_state.training_running = True
                 st.session_state.training_done = False
                 st.session_state.training_epoch = 0
@@ -1606,7 +1607,7 @@ def page_checkpoints():
         "Size": fmt_size(c.get("size", 0)),
     } for c in reversed(ckpts)])
 
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.dataframe(df, width='stretch', hide_index=True)
 
     st.markdown("---")
 
@@ -1641,11 +1642,11 @@ def page_checkpoints():
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        if st.button("▶  Resume Training", use_container_width=True, key="ckpt_resume"):
+        if st.button("▶  Resume Training", width='stretch', key="ckpt_resume"):
             st.session_state.page = "Training"
             st.rerun()
     with c2:
-        if st.button("📋 View Full Metadata", use_container_width=True, key="ckpt_meta"):
+        if st.button("📋 View Full Metadata", width='stretch', key="ckpt_meta"):
             st.json(selected_ckpt)
     with c3:
         is_o3 = selected_ckpt['cid'] != "local-only"
@@ -1702,7 +1703,92 @@ def page_checkpoints():
                           margin=dict(l=40, r=20, t=40, b=30))
         fig.update_xaxes(title_text="Epoch", gridcolor="#2d1f16")
         fig.update_yaxes(gridcolor="#2d1f16")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
+
+# ============================================================================
+# PAGE: BUCKETS
+# ============================================================================
+def page_buckets():
+    top_bar()
+    st.markdown("""<div class="section-title" style="font-size:20px;">🪣 O3 Buckets</div>""", unsafe_allow_html=True)
+
+    if not st.session_state.connected:
+        st.markdown("""
+        <div class="card-inner" style="padding:40px; text-align:center;">
+            <div style="font-size:36px; margin-bottom:12px;">🔒</div>
+            <div style="font-size:16px; font-weight:600; color:#f0e4d8;">Wallet Not Connected</div>
+            <div style="font-size:13px; color:#a08070; margin-top:8px;">Connect your wallet in Settings to view O3 buckets</div>
+        </div>
+        """, unsafe_allow_html=True)
+        return
+
+    # Fetch buckets
+    client = st.session_state.o3_client
+    try:
+        buckets = client.list_buckets()
+        bucket_list = [{"name": b.name if hasattr(b, 'name') else str(b)} for b in buckets]
+    except Exception as e:
+        st.error(f"Error fetching buckets: {e}")
+        return
+
+    if not bucket_list:
+        st.markdown("""
+        <div class="card-inner" style="padding:40px; text-align:center;">
+            <div style="font-size:36px; margin-bottom:12px;">📭</div>
+            <div style="font-size:16px; font-weight:600; color:#f0e4d8;">No Buckets</div>
+            <div style="font-size:13px; color:#a08070; margin-top:8px;">Create your first bucket in Settings or via the O3Client API</div>
+        </div>
+        """, unsafe_allow_html=True)
+        return
+
+    # Display buckets table
+    st.markdown("### 📋 All Buckets")
+    df = pd.DataFrame([{"Bucket Name": b["name"], "Status": "✅ Active", "Type": "Object Storage"} for b in bucket_list])
+    st.dataframe(df, width='stretch', hide_index=True)
+
+    st.markdown("---")
+    st.markdown("### 🎯 Quick Actions")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        new_bucket_name = st.text_input("New bucket name:", placeholder="e.g., my-ml-data")
+        if st.button("➕ Create New Bucket", width='stretch', key="create_bucket_btn"):
+            if new_bucket_name:
+                try:
+                    client.create_bucket(new_bucket_name)
+                    st.success(f"✅ Bucket '{new_bucket_name}' created!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error creating bucket: {e}")
+            else:
+                st.warning("Enter a bucket name")
+    
+    with col2:
+        st.markdown("<div style='height:60px;'></div>", unsafe_allow_html=True)
+        if st.button("🔄 Refresh Buckets", width='stretch', key="refresh_buckets"):
+            st.rerun()
+    
+    with col3:
+        st.markdown("<div style='height:60px;'></div>", unsafe_allow_html=True)
+        if st.button("📖 API Reference", width='stretch', key="buckets_api_ref"):
+            st.session_state.page = "API Docs"
+            st.rerun()
+
+    st.markdown("---")
+    st.markdown("### 💡 Example: Use Buckets in Python")
+    code = """from pytorch_o3 import O3Client
+
+client = O3Client()
+# List all buckets
+buckets = client.list_buckets()
+
+# Create a new bucket
+client.create_bucket("my-training-data")
+
+# List objects in a bucket
+objects = client.list_objects("my-training-data", prefix="models/")
+"""
+    st.code(code, language="python")
 
 # ============================================================================
 # PAGE: SETTINGS
@@ -1719,7 +1805,7 @@ def page_settings():
 
     c1, c2 = st.columns(2)
     with c1:
-        if st.button("🔗 Test Connection", use_container_width=True, key="set_test"):
+        if st.button("🔗 Test Connection", width='stretch', key="set_test"):
             if key_input:
                 if do_connect(key_input):
                     st.success("✅ Connected successfully!")
@@ -1736,7 +1822,7 @@ def page_settings():
                 else:
                     st.error("Enter a key or set AKAVE_PRIVATE_KEY in .env")
     with c2:
-        if st.button("📄 Load from .env", use_container_width=True, key="set_env"):
+        if st.button("📄 Load from .env", width='stretch', key="set_env"):
             env_key = os.getenv("AKAVE_PRIVATE_KEY")
             if env_key:
                 if do_connect(env_key):
@@ -1754,7 +1840,7 @@ def page_settings():
         </div>
         """, unsafe_allow_html=True)
 
-        if st.button("🔌 Disconnect Wallet", use_container_width=True, key="set_disconnect"):
+        if st.button("🔌 Disconnect Wallet", width='stretch', key="set_disconnect"):
             st.session_state.connected = False
             st.session_state.wallet_addr = None
             st.session_state.o3_client = None
@@ -1777,6 +1863,7 @@ pages = {
     "Datasets": page_datasets,
     "Training": page_training,
     "Checkpoints": page_checkpoints,
+    "Buckets": page_buckets,
     "API Docs": page_api_docs,
     "Settings": page_settings,
 }
