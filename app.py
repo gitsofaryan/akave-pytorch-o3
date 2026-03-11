@@ -880,7 +880,7 @@ def page_overview():
 
     qs1, qs2 = st.columns(2)
     with qs1:
-        st.markdown("""
+        st.markdown(r"""
         <div class="card-inner" style="padding:20px;">
             <div style="font-size:13px; font-weight:600; color:#e8451e; margin-bottom:10px;">📋 Setup (CLI)</div>
             <div style="font-family:'JetBrains Mono','Courier New',monospace; font-size:11px; color:#a08070; line-height:2; background:#110a06; padding:14px; border-radius:6px;">
@@ -1113,7 +1113,7 @@ def page_api_docs():
     st.markdown("### 🧠 MNIST Example")
     st.markdown('<div style="font-size:13px; color:#a08070; margin-bottom:12px;">End-to-end training: <code>examples/train_mnist.py</code></div>', unsafe_allow_html=True)
 
-    st.markdown("""
+    st.markdown(r"""
     <div class="card-inner" style="padding:18px;">
         <div style="font-family:'JetBrains Mono','Courier New',monospace; font-size:11px; color:#a08070; line-height:2; background:#110a06; padding:14px; border-radius:6px;">
             <span style="color:#3fb950;">$</span> python examples/train_mnist.py \<br>
